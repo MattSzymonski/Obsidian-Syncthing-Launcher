@@ -1,0 +1,9 @@
+{
+	"id": "syncthing-launcher",
+	"name": "Syncthing Launcher",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Runs Syncthing in the background and displays connection status in the status bar",
+	"author": "MattSzymonski",
+	"isDesktopOnly": false
+}

@@ -6,30 +6,44 @@ export default class MyPlugin extends Plugin {
 	statusBarItem: HTMLElement | null = this.addStatusBarItem();
 
 	syncthingInstance: ChildProcessWithoutNullStreams | null = null;
-	syncthingLastSyncDate: Date = new Date();
+	syncthingLastSyncDate: string = "no data";
 
 	syncFolderID: string = 'ms-ov';
 	syncthingApiKey: string = 'isoDgfErkUr7GSzPTPsMiaHNsJqLvMuS';
 	syncthingUrl = 'http://127.0.0.1:8384/';
+	updateInterval: number = 5000;
 
-	
 	updateStatusBar(): void {
 		this.isSyncthingRunning().then(isRunning => {
 			
-			this.syncthingLastSyncDate = new Date();
+			if (isRunning) {
+				this.getLastSyncDate().then(lastSyncDate => {
+					if (lastSyncDate !== null)
+					{
+						const optionsDate: Intl.DateTimeFormatOptions = { day: '2-digit', month: '2-digit', year: '2-digit' };
+						const formattedDate = lastSyncDate.toLocaleDateString('en-GB', optionsDate).split( '/' ).reverse( ).join( '.' );
 
+						const optionsTime: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit', hour12: false };
+						const formattedTime = lastSyncDate.toLocaleTimeString('en-GB', optionsTime); 
+
+						this.syncthingLastSyncDate = `${formattedDate} ${formattedTime}`;
+					}
+					else
+					{
+						this.syncthingLastSyncDate = "no data";
+					}
+				});
+			}
+			
 			const connectionStatus = isRunning ? "🔵" : "⚫";
-			const lastSyncTime = this.syncthingLastSyncDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-
-			this.statusBarItem?.setText(`${connectionStatus} Last sync: ${lastSyncTime}`);
+			this.statusBarItem?.setText(`${connectionStatus} Last sync: ${this.syncthingLastSyncDate}`);
 		});
 	}
 
 	async onload() {
 		this.statusBarItem?.onClickEvent((event) => {
-			new Notice('Starting Syncthingx!');
+			new Notice('Starting Syncthing!');
 			this.startSyncthing();
-			this.getLastSyncDate();
 		});
 
 		// Add css class to status bar item
@@ -39,9 +53,11 @@ export default class MyPlugin extends Plugin {
 		this.updateStatusBar();
 
 		this.registerInterval(
-			window.setInterval(() => this.updateStatusBar(), 1000)
+			window.setInterval(() => this.updateStatusBar(), this.updateInterval)
 		);
 	}
+
+
 
 	onunload() {
 		// Kill syncthing if running
@@ -98,36 +114,33 @@ export default class MyPlugin extends Plugin {
 
 	getPluginAbsolutePath(): string {
         let basePath;
-        let relativePath;
 
-        // base path
+        // Base path
         if (this.app.vault.adapter instanceof FileSystemAdapter) {
             basePath = this.app.vault.adapter.getBasePath();
         } else {
             throw new Error('Cannot determine base path.');
         }
 
-        // relative path
-        relativePath = `${this.app.vault.configDir}/plugins/${this.manifest.id}-${this.manifest.version}/`;
+        // Relative path
+        const relativePath = `${this.app.vault.configDir}/plugins/${this.manifest.id}-${this.manifest.version}/`;
 
-        // absolute path
+        // Absolute path
         return `${basePath}/${relativePath}`;
     }
 
 	async getLastSyncDate() {
 		try {
-		  const response = await axios.get(this.syncthingUrl, {
+		  const response = await axios.get(this.syncthingUrl + `rest/db/status?folder=${this.syncFolderID}`, {
 			headers: {
 			  'X-API-Key': this.syncthingApiKey
 			}
 		  });
-	  
-		  if (response.data && response.data.lastScan) {
-			const lastSyncDate = new Date(response.data.lastScan);
-			console.log(`Last sync date for folder ${this.syncFolderID}:`, lastSyncDate);
-			return lastSyncDate;
+
+		  if (response.data && response.data.stateChanged) {
+			return new Date(response.data.stateChanged);
 		  } else {
-			console.log('No sync data found.');
+			console.log('No sync data found');
 			return null;
 		  }
 		} catch (error) {

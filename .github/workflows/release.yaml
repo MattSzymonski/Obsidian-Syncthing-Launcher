@@ -22,13 +22,41 @@ jobs:
           npm install
           npm run build
 
+      - name: Fetch latest Syncthing release
+        id: syncthing_release
+        uses: actions/github-script@v5
+        with:
+          script: |
+            const { data } = await github.rest.repos.getLatestRelease({
+              owner: 'syncthing',
+              repo: 'syncthing',
+            });
+            return data;
+
+      - name: Download Syncthing release asset
+        run: |
+          wget -O syncthing.zip $(echo "${{ steps.syncthing_release.outputs.result }}" | jq -r '.assets[] | select(.name | contains("syncthing-windows-amd64")).browser_download_url')
+          
+      - name: Extract Syncthing and place in 'syncthing' directory
+        run: |
+          unzip syncthing.zip -d syncthing/
+
+      - name: Delete 'etc' folder
+        run: |
+          rm -rf syncthing/etc/
+
+      - name: Create lowercase tag name
+        id: format_tag
+        run: echo "::set-output name=lowercase_tag::$(echo ${GITHUB_REF#refs/tags/} | tr '[:upper:]' '[:lower:]')"
+      
+
       - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
+          tag=${{ steps.format_tag.outputs.lowercase_tag }}
 
           gh release create "$tag" \
             --title="$tag" \
             --draft \
-            main.js manifest.json styles.css
+            main.js manifest.json styles.css syncthing/

@@ -1,7 +1,7 @@
 {
 	"id": "obsidian-syncthing-launcher",
 	"name": "Syncthing Launcher",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"minAppVersion": "0.15.0",
 	"description": "Runs Syncthing as subprocess and displays connection status in the status bar",
 	"author": "MattSzymonski",

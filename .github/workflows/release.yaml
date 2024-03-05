@@ -23,6 +23,10 @@ jobs:
           npm run build
 
       - name: Create release
+        run: |
+          ls -l
+
+      - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

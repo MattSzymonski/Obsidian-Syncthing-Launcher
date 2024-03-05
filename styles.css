@@ -7,6 +7,13 @@ If your plugin does not need CSS, delete this file.
 
 */
 
-.status-bar-item {
+
+.mouse-pointer
+{
     cursor: pointer;
+}
+
+.status-icon
+{
+    margin-left: 10px;
 }

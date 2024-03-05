@@ -35,20 +35,20 @@ jobs:
 
       - name: Download Syncthing release asset
         run: |
-          wget -O syncthing.zip $(echo "${{ steps.syncthing_release.outputs.result }}" | jq -r '.assets[] | select(.name | contains("syncthing-windows-amd64")).browser_download_url')
+          curl -s https://api.github.com/repos/syncthing/syncthing/releases/latest | \
+          jq -r '.assets[] | select(.name | test("syncthing-windows-amd64-.*\\.zip")) | .browser_download_url' | \
+          xargs -I {} curl -L -o syncthing.zip {}
           
-      - name: Extract Syncthing and place in 'syncthing' directory
+      - name: Extract Syncthing to 'syncthing' directory and removing etc directory
         run: |
-          unzip syncthing.zip -d syncthing/
-
-      - name: Delete 'etc' folder
-        run: |
-          rm -rf syncthing/etc/
+          unzip syncthing.zip -d syncthing_temp && \
+          mkdir syncthing && \
+          first_folder=$(find syncthing_temp -mindepth 1 -maxdepth 1 -type d | head -n 1) && mv "$first_folder"/* syncthing && \
+          rm -rf syncthing_temp syncthing/etc/
 
       - name: Create lowercase tag name
         id: format_tag
         run: echo "::set-output name=lowercase_tag::$(echo ${GITHUB_REF#refs/tags/} | tr '[:upper:]' '[:lower:]')"
-      
 
       - name: Create release
         env:

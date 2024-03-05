@@ -59,4 +59,4 @@ jobs:
           gh release create "$tag" \
             --title="$tag" \
             --draft \
-            main.js manifest.json styles.css syncthing/*
+            main.js manifest.json styles.css syncthing/syncthing.exe syncthing/AUTHORS.txt syncthing/LICENSE.txt syncthing/README.txt syncthing/metadata/release.sig

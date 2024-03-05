@@ -22,17 +22,46 @@ jobs:
           npm install
           npm run build
 
-      - name: Create release
+      - name: Fetch latest Syncthing release
+        id: syncthing_release
+        uses: actions/github-script@v5
+        with:
+          script: |
+            const { data } = await github.rest.repos.getLatestRelease({
+              owner: 'syncthing',
+              repo: 'syncthing',
+            });
+            return data;
+
+      - name: Download Syncthing release asset
         run: |
-          ls -l
+          curl -s https://api.github.com/repos/syncthing/syncthing/releases/latest | \
+          jq -r '.assets[] | select(.name | test("syncthing-windows-amd64-.*\\.zip")) | .browser_download_url' | \
+          xargs -I {} curl -L -o syncthing.zip {}
+          
+      - name: Extract Syncthing to 'syncthing' directory and remove etc directory
+        run: |
+          unzip syncthing.zip -d syncthing_temp && \
+          mkdir syncthing && \
+          first_folder=$(find syncthing_temp -mindepth 1 -maxdepth 1 -type d | head -n 1) && mv "$first_folder"/* syncthing && \
+          rm -rf syncthing_temp syncthing/etc/
+
+      - name: Zip release files
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          zip -r "obsidian-syncthing-launcher-${tag}.zip" main.js manifest.json styles.css syncthing/
+
+      - name: Create lowercase tag name
+        id: format_tag
+        run: echo "::set-output name=lowercase_tag::$(echo ${GITHUB_REF#refs/tags/} | tr '[:upper:]' '[:lower:]')"
 
       - name: Create release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${GITHUB_REF#refs/tags/}"
+          tag=${{ steps.format_tag.outputs.lowercase_tag }}
 
           gh release create "$tag" \
             --title="$tag" \
             --draft \
-            main.js manifest.json styles.css
+            "obsidian-syncthing-launcher-${tag}.zip"

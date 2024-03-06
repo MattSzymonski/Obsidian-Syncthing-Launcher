@@ -5,18 +5,22 @@ import axios from 'axios';
 interface Settings {
 	syncthingApiKey: string;
 	vaultFolderID: string;
+	startOnObsidianOpen: boolean;
+	stopOnObsidianClose: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
 	syncthingApiKey: '',
-	vaultFolderID: ''
+	vaultFolderID: '',
+	startOnObsidianOpen: false,
+	stopOnObsidianClose: false
 }
 
 export default class SyncthingLauncher extends Plugin {
 	public settings: Settings;
 
 	private syncthingUrl = 'http://127.0.0.1:8384/';
-	private updateInterval: number = 1000;
+	private updateInterval: number = 3000;
 
 	private syncthingInstance: ChildProcessWithoutNullStreams | null = null;
 	private syncthingLastSyncDate: string = "no data";
@@ -48,22 +52,21 @@ export default class SyncthingLauncher extends Plugin {
 			window.setInterval(() => this.updateStatusBar(), this.updateInterval)
 		);
 
-		// Resister settings tab
+		// Register settings tab
 		this.addSettingTab(new SettingTab(this.app, this));
+
+		// Start syncthing if set in settings
+		if (this.settings.startOnObsidianOpen)
+		{
+			this.startSyncthing();
+		}
 	}
 
 	onunload() {
-		// Kill syncthing if running
-		const pid : number | undefined = this.syncthingInstance?.pid;
-		if (pid !== undefined) {
-			var kill = require('tree-kill');
-			kill(pid, 'SIGTERM', (err: any) => {
-				if (err) {
-					console.error('Failed to kill process tree:', err);
-				} else {
-					console.log('Process tree killed successfully.');
-				}
-			});
+		// Kill syncthing if running and set in settings
+		if (this.settings.startOnObsidianOpen)
+		{
+			this.stopSyncthing();
 		}
 	}
 
@@ -103,6 +106,20 @@ export default class SyncthingLauncher extends Plugin {
 				console.log(`child process exited with code ${code}`);
 			});
 		});
+	}
+
+	stopSyncthing(): void {
+		const pid : number | undefined = this.syncthingInstance?.pid;
+		if (pid !== undefined) {
+			var kill = require('tree-kill');
+			kill(pid, 'SIGTERM', (err: any) => {
+				if (err) {
+					console.error('Failed to kill process tree:', err);
+				} else {
+					console.log('Process tree killed successfully.');
+				}
+			});
+		}
 	}
 
 	updateStatusBar(): void {
@@ -225,6 +242,24 @@ class SettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.vaultFolderID)
 				.onChange(async (value) => {
 					this.plugin.settings.vaultFolderID = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Start on Obsidian open')
+			.setDesc('Start Syncthing when Obsidian opens')
+			.addToggle(toggle => toggle.setValue(this.plugin.settings.startOnObsidianOpen)
+				.onChange(async (value) => {
+					this.plugin.settings.startOnObsidianOpen = value;
+					await this.plugin.saveSettings();
+				}));
+		
+		new Setting(containerEl)
+			.setName('Stop on Obsidian close')
+			.setDesc('Stop Syncthing when Obsidian closes')
+			.addToggle(toggle => toggle.setValue(this.plugin.settings.stopOnObsidianClose)
+				.onChange(async (value) => {
+					this.plugin.settings.stopOnObsidianClose = value;
 					await this.plugin.saveSettings();
 				}));
 	}

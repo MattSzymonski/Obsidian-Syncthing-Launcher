@@ -1,26 +1,32 @@
 import { App, Editor, FileSystemAdapter, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, addIcon } from 'obsidian';
-import { ChildProcessWithoutNullStreams, exec, spawn } from "child_process";
 import axios from 'axios';
+import { ChildProcessWithoutNullStreams, exec, spawn } from "child_process";
+import { ContainerCreateOptions, Container } from 'dockerode';
 
 interface Settings {
 	syncthingApiKey: string;
 	vaultFolderID: string;
 	startOnObsidianOpen: boolean;
 	stopOnObsidianClose: boolean;
+	useDocker: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
 	syncthingApiKey: '',
 	vaultFolderID: '',
 	startOnObsidianOpen: false,
-	stopOnObsidianClose: false
+	stopOnObsidianClose: false,
+	useDocker: false,
 }
+
+const SYNCTHING_URL = 'http://127.0.0.1:8384/';
+const UPDATE_INTERVAL = 3000;
 
 export default class SyncthingLauncher extends Plugin {
 	public settings: Settings;
 
-	private syncthingUrl = 'http://127.0.0.1:8384/';
-	private updateInterval: number = 3000;
+	private vaultPath = "";
+	private vaultName = "";
 
 	private syncthingInstance: ChildProcessWithoutNullStreams | null = null;
 	private syncthingLastSyncDate: string = "no data";
@@ -30,6 +36,12 @@ export default class SyncthingLauncher extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+
+		let adapter = this.app.vault.adapter;
+		if (adapter instanceof FileSystemAdapter) {
+			this.vaultPath = adapter.getBasePath();
+			this.vaultName = adapter.getName();
+		}
 
 		this.statusBarConnectionIconItem?.addClasses(['status-bar-item', 'status-icon']);
 		this.statusBarConnectionIconItem?.setAttribute('data-tooltip-position', 'top');
@@ -49,7 +61,7 @@ export default class SyncthingLauncher extends Plugin {
 
 		// Register tick interval
 		this.registerInterval(
-			window.setInterval(() => this.updateStatusBar(), this.updateInterval)
+			window.setInterval(() => this.updateStatusBar(), UPDATE_INTERVAL)
 		);
 
 		// Register settings tab
@@ -70,16 +82,6 @@ export default class SyncthingLauncher extends Plugin {
 		}
 	}
 
-	// --- Settings ---
-
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
-
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-
 	// --- Logic ---
 
 	startSyncthing() {
@@ -90,22 +92,102 @@ export default class SyncthingLauncher extends Plugin {
 				return;
 			}
 
-			// Start
-			const executablePath = this.getPluginAbsolutePath() + "syncthing/syncthing.exe";
-			this.syncthingInstance = spawn(executablePath, []);
-	
-			this.syncthingInstance.stdout.on('data', (data) => {
-				console.log(`stdout: ${data}`);
-			});
-	
-			this.syncthingInstance.stderr.on('data', (data) => {
-				console.error(`stderr: ${data}`);
-			});
-	
-			this.syncthingInstance.on('exit', (code) => {
-				console.log(`child process exited with code ${code}`);
-			});
+			if (this.settings.useDocker) // Docker
+			{
+				this.checkDockerStatus().then(isRunning => {
+					if (isRunning)
+					{
+						new Notice('Starting Docker');
+						this.startDockerContainer();
+					}
+				})
+			}
+			else // Local Obsidian sub-process
+			{
+				const executablePath = this.getPluginAbsolutePath() + "syncthing/syncthing.exe";
+				this.syncthingInstance = spawn(executablePath, []);
+
+				this.syncthingInstance.stdout.on('data', (data) => {
+					console.log(`stdout: ${data}`);
+				});
+
+				this.syncthingInstance.stderr.on('data', (data) => {
+					console.error(`stderr: ${data}`);
+				});
+
+				this.syncthingInstance.on('exit', (code) => {
+					console.log(`child process exited with code ${code}`);
+				});
+			}
 		});
+	}
+
+	async startDockerContainer() {
+		try {
+			// Create a new Docker instance
+			const Docker = require('dockerode');
+			const docker = new Docker({socketPath: '/var/run/docker.sock'});
+
+			// Define the options for the container
+			const containerOptions = {
+				name: 'syncthing',
+				Hostname: 'syncthing',
+				RestartPolicy: {
+					Name: 'unless-stopped'
+				},
+				Env: ['PUID=1000', 'PGID=1000'],
+				HostConfig: {
+					Binds: [
+						`${this.vaultPath}:/var/syncthing/data/obsidian/${this.vaultName}`,
+						`${this.vaultPath}/.obsidian/syncthing/config:/var/syncthing/config`,
+					]
+				},
+				PortBindings: {
+					'8384': [{ HostPort: '8384' }],
+					'22000/tcp': [{ HostPort: '22000' }],
+					'22000/udp': [{ HostPort: '22000' }],
+					'21027/udp': [{ HostPort: '21027' }]
+				}
+			};
+
+			docker.createContainer(containerOptions, function(err: any, container: Container) {
+				if (err) {
+				  console.error('Error creating Syncthing Docker container: ' + err);
+				  return;
+				}
+			  
+				container.start(function(err: any, data: any) {
+				  if (err) {
+					console.error('Error starting Syncthing Docker container: ' + err);
+					return;
+				  }
+				  console.log('Syncthing Docker container started successfully');
+				});
+			});
+
+			const container = await docker.createContainer(containerOptions);
+			await container.start();
+			console.log("Container started!");
+		} catch (err) {
+			console.error("Error starting container:", err);
+		}
+	};
+
+	async checkDockerStatus(): Promise<boolean> {
+		try {
+			const { stdout, stderr } = await execAsync('docker ps');
+			if (stderr) {
+				console.error('Error:', stderr);
+				new Notice('Docker is not running');
+				return false; // Docker is not running or encountered an error
+			}
+			console.log('Docker is installed and running');
+			return true; // Docker is installed and running
+		} catch (error) {
+			console.error('Error:', error.message);
+			new Notice('Docker is not installed or not running');
+			return false; // Docker is not installed or not running
+		}
 	}
 
 	stopSyncthing(): void {
@@ -167,7 +249,7 @@ export default class SyncthingLauncher extends Plugin {
 			}
 		};
 		
-		return axios.get(this.syncthingUrl, config)
+		return axios.get(SYNCTHING_URL, config)
 			.then(response => true)
 			.catch(error => { console.log("Syncthing not running"); return false; });
 	}
@@ -191,7 +273,7 @@ export default class SyncthingLauncher extends Plugin {
 
 	async getLastSyncDate() {
 		try {
-		  const response = await axios.get(this.syncthingUrl + `rest/db/status?folder=${this.settings.vaultFolderID}`, {
+		  const response = await axios.get(SYNCTHING_URL + `rest/db/status?folder=${this.settings.vaultFolderID}`, {
 			headers: {
 			  'X-API-Key': this.settings.syncthingApiKey,
 			}
@@ -207,6 +289,16 @@ export default class SyncthingLauncher extends Plugin {
 		  console.error('Failed to get last sync date:', error);
 		  return null;
 		}
+	}
+
+	// --- Settings ---
+
+	async loadSettings() {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	}
+
+	async saveSettings() {
+		await this.saveData(this.settings);
 	}
 }
 
@@ -262,6 +354,19 @@ class SettingTab extends PluginSettingTab {
 					this.plugin.settings.stopOnObsidianClose = value;
 					await this.plugin.saveSettings();
 				}));
+
+		new Setting(containerEl)
+			.setName('Use Docker')
+			.setDesc('Run Syncthing in Docker container instead of running it locally')
+			.addToggle(toggle => toggle.setValue(this.plugin.settings.useDocker)
+				.onChange(async (value) => {
+					this.plugin.settings.useDocker = value;
+					await this.plugin.saveSettings();
+				}));
 	}
+}
+
+function execAsync(arg0: string): { stdout: any; stderr: any; } | PromiseLike<{ stdout: any; stderr: any; }> {
+	throw new Error('Function not implemented.');
 }
 

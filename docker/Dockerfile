@@ -1,7 +1,7 @@
 FROM nginx:alpine
 
 WORKDIR /etc/nginx
-COPY ./nginx.conf /etc/nginx/nginx.conf
+COPY ./nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 8384
 EXPOSE 80

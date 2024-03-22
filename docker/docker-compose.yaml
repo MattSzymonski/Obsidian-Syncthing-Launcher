@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: syncthing_cors_proxy
+    restart: unless-stopped
+    volumes:
+      - Z:\Obsidian\MattSzymonski\.obsidian\plugins\obsidian-syncthing-launcher-1.0.2\docker\nginx.conf:/etc/nginx/conf.d/default.conf
+    ports:
+      - 8380:80  
+  syncthing:
+    image: syncthing/syncthing:latest
+    container_name: syncthing
+    hostname: syncthing
+    user: 1001:1001
+    restart: unless-stopped
+    env_file:
+      - path: ./.env
+        required: true
+    depends_on:
+      - nginx
+    environment:
+      - PUID=1001
+      - PGID=1001
+    volumes:
+      - ${VAULT_PATH}:/var/syncthing/data/obsidian/mattszymonski
+      - ${SYNCTHING_CONFIG_PATH}:/var/syncthing/config
+    ports:
+      - 8384:8384 # Web UI
+      - 22000:22000/tcp # TCP file transfers
+      - 22000:22000/udp # QUIC file transfers
+      - 21027:21027/udp # Receive local discovery broadcasts

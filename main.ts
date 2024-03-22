@@ -1,7 +1,7 @@
-import { App, Editor, FileSystemAdapter, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, addIcon } from 'obsidian';
-import axios from 'axios';
+import { App, FileSystemAdapter, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 import { ChildProcessWithoutNullStreams, exec, spawn } from "child_process";
-import { ContainerCreateOptions, Container } from 'dockerode';
+import { readFileSync, writeFileSync } from 'fs';
+import axios from 'axios';
 
 interface Settings {
 	syncthingApiKey: string;
@@ -19,8 +19,9 @@ const DEFAULT_SETTINGS: Settings = {
 	useDocker: false,
 }
 
-const SYNCTHING_URL = 'http://127.0.0.1:8384/';
-const UPDATE_INTERVAL = 3000;
+const UPDATE_INTERVAL = 5000;
+const SYNCTHING_CONTAINER_URL = "http://127.0.0.1:8384/";
+const SYNCTHING_CORS_PROXY_CONTAINER_URL = "http://127.0.0.1:8380/";
 
 export default class SyncthingLauncher extends Plugin {
 	public settings: Settings;
@@ -45,13 +46,16 @@ export default class SyncthingLauncher extends Plugin {
 
 		this.statusBarConnectionIconItem?.addClasses(['status-bar-item', 'status-icon']);
 		this.statusBarConnectionIconItem?.setAttribute('data-tooltip-position', 'top');
-		this.statusBarLastSyncTextItem?.addClass('status-bar-item');
 
 		this.statusBarConnectionIconItem?.onClickEvent((event) => {
 			this.isSyncthingRunning().then(isRunning => {
 				if (!isRunning) {
 					new Notice('Starting Syncthing!');
 					this.startSyncthing();
+				}
+				else {
+					new Notice('Stopping Syncthing!');
+					this.stopSyncthing();
 				}
 			}
 		)});
@@ -72,19 +76,26 @@ export default class SyncthingLauncher extends Plugin {
 		{
 			this.startSyncthing();
 		}
+
+		// Register on Obsidian close handler 
+		window.addEventListener('beforeunload', this.handleBeforeUnload.bind(this));
 	}
 
 	onunload() {
+		window.removeEventListener('beforeunload', this.handleBeforeUnload.bind(this));
+	}
+
+	// --- Logic ---
+
+	handleBeforeUnload(event: any) {
 		// Kill syncthing if running and set in settings
-		if (this.settings.startOnObsidianOpen)
+		if (this.settings.stopOnObsidianClose)
 		{
 			this.stopSyncthing();
 		}
 	}
 
-	// --- Logic ---
-
-	startSyncthing() {
+	async startSyncthing() {
 		this.isSyncthingRunning().then(isRunning => {
 			// Check if already running
 			if (isRunning) {
@@ -94,13 +105,11 @@ export default class SyncthingLauncher extends Plugin {
 
 			if (this.settings.useDocker) // Docker
 			{
-				this.checkDockerStatus().then(isRunning => {
-					if (isRunning)
-					{
-						new Notice('Starting Docker');
-						this.startDockerContainer();
-					}
-				})
+				if (this.checkDockerStatus())
+				{
+					new Notice('Starting Docker');
+					this.startSyncthingDockerStack();
+				}
 			}
 			else // Local Obsidian sub-process
 			{
@@ -122,91 +131,123 @@ export default class SyncthingLauncher extends Plugin {
 		});
 	}
 
-	async startDockerContainer() {
-		try {
-			// Create a new Docker instance
-			const Docker = require('dockerode');
-			const docker = new Docker({socketPath: '/var/run/docker.sock'});
+	stopSyncthing(): void {
 
-			// Define the options for the container
-			const containerOptions = {
-				name: 'syncthing',
-				Hostname: 'syncthing',
-				RestartPolicy: {
-					Name: 'unless-stopped'
-				},
-				Env: ['PUID=1000', 'PGID=1000'],
-				HostConfig: {
-					Binds: [
-						`${this.vaultPath}:/var/syncthing/data/obsidian/${this.vaultName}`,
-						`${this.vaultPath}/.obsidian/syncthing/config:/var/syncthing/config`,
-					]
-				},
-				PortBindings: {
-					'8384': [{ HostPort: '8384' }],
-					'22000/tcp': [{ HostPort: '22000' }],
-					'22000/udp': [{ HostPort: '22000' }],
-					'21027/udp': [{ HostPort: '21027' }]
-				}
-			};
+		if (this.settings.useDocker)
+		{
+			const dockerRunCommand = [
+				`docker compose`,
+				`-f ${this.getPluginAbsolutePath()}docker/docker-compose.yaml`,
+				`stop`,
+			];
 
-			docker.createContainer(containerOptions, function(err: any, container: Container) {
-				if (err) {
-				  console.error('Error creating Syncthing Docker container: ' + err);
-				  return;
+			exec(dockerRunCommand.join(' '), (error, stdout, stderr) => {
+				if (error) {
+					console.error('Error:', error.message);
+					return false;
 				}
-			  
-				container.start(function(err: any, data: any) {
-				  if (err) {
-					console.error('Error starting Syncthing Docker container: ' + err);
-					return;
-				  }
-				  console.log('Syncthing Docker container started successfully');
-				});
+				if (stderr) {
+					console.log(stderr);
+					return false;
+				}
+	
+				console.log('Output:', stdout);
 			});
-
-			const container = await docker.createContainer(containerOptions);
-			await container.start();
-			console.log("Container started!");
-		} catch (err) {
-			console.error("Error starting container:", err);
 		}
-	};
-
-	async checkDockerStatus(): Promise<boolean> {
-		try {
-			const { stdout, stderr } = await execAsync('docker ps');
-			if (stderr) {
-				console.error('Error:', stderr);
-				new Notice('Docker is not running');
-				return false; // Docker is not running or encountered an error
+		else
+		{
+			const pid : number | undefined = this.syncthingInstance?.pid;
+			if (pid !== undefined) {
+				var kill = require('tree-kill');
+				kill(pid, 'SIGTERM', (err: any) => {
+					if (err) {
+						console.error('Failed to kill process tree:', err);
+					} else {
+						console.log('Process tree killed successfully.');
+					}
+				});
 			}
-			console.log('Docker is installed and running');
-			return true; // Docker is installed and running
-		} catch (error) {
-			console.error('Error:', error.message);
-			new Notice('Docker is not installed or not running');
-			return false; // Docker is not installed or not running
 		}
 	}
 
-	stopSyncthing(): void {
-		const pid : number | undefined = this.syncthingInstance?.pid;
-		if (pid !== undefined) {
-			var kill = require('tree-kill');
-			kill(pid, 'SIGTERM', (err: any) => {
-				if (err) {
-					console.error('Failed to kill process tree:', err);
-				} else {
-					console.log('Process tree killed successfully.');
-				}
-			});
-		}
+	async startSyncthingDockerStack() {
+		// Set environment variable
+		this.updateEnvFile({
+			VAULT_PATH: `${this.vaultPath}`,
+			SYNCTHING_CONFIG_PATH: `${this.vaultPath}/.obsidian/syncthing_config`,
+		});
+
+		// Run Docker container
+		const dockerRunCommand = [
+			`docker compose`,
+			`-f ${this.getPluginAbsolutePath()}docker/docker-compose.yaml`,
+			`up`, 
+			`-d`
+		];
+
+		exec(dockerRunCommand.join(' '), (error, stdout, stderr) => {
+			if (error) {
+				console.error('Error:', error.message);
+				return false;
+			}
+			if (stderr) {
+				console.log(stderr);
+				return false;
+			}
+
+			console.log('Output:', stdout);
+		});
+	};
+
+	updateEnvFile(vars: Record<string, string>) {
+		const filePath = `${this.getPluginAbsolutePath()}docker/.env`;
+		let content = readFileSync(filePath, 'utf8');
+	  
+		Object.entries(vars).forEach(([key, value]) => {
+		  const regex = new RegExp(`^${key}=.*`, 'm');
+		  content = content.replace(regex, `${key}=${value}`);
+		});
+	  
+		writeFileSync(filePath, content, 'utf8');
+	  }
+
+	getSyncthingURL(): string {
+		return this.settings.useDocker ? SYNCTHING_CORS_PROXY_CONTAINER_URL : SYNCTHING_CONTAINER_URL;
+	}
+
+	async isSyncthingRunning(): Promise<boolean> {
+		const config = {
+			headers: {
+				'X-API-Key': this.settings.syncthingApiKey,
+			}
+		};
+
+		return axios.get(this.getSyncthingURL() , config)
+			.then(response => { return true; })
+			.catch(error => { console.log("Syncthing status: Not running"); return false; });
+	}
+
+	checkDockerStatus(): boolean {
+		exec('docker ps', (error, stdout, stderr) => {
+			if (error) {
+				console.error('Error:', error.message);
+				return false;
+			}
+			if (stderr) {
+				console.error('Error:', stderr);
+				return false;
+			}
+
+			console.log('Output:', stdout);
+		});
+
+		return true;
 	}
 
 	updateStatusBar(): void {
 		this.isSyncthingRunning().then(isRunning => {
-			
+
+			// Display text in status bar
 			if (isRunning) {
 				this.getLastSyncDate().then(lastSyncDate => {
 					if (lastSyncDate !== null)
@@ -225,33 +266,17 @@ export default class SyncthingLauncher extends Plugin {
 				});
 			}
 			
+			// Display status icon in status bar
 			if (this.statusBarConnectionIconItem) {
 				this.statusBarConnectionIconItem.setText(isRunning ? "🔵" : "⚫");
-				this.statusBarConnectionIconItem.ariaLabel = isRunning ? "Syncthing connected" : "Click to start Syncthing";
-				if (isRunning) {
-					this.statusBarConnectionIconItem.removeClasses(['plugin-editor-status', 'mouse-pointer']);
-				}
-				else {
-					this.statusBarConnectionIconItem.addClasses(['plugin-editor-status', 'mouse-pointer']);
-				}
+				this.statusBarConnectionIconItem.ariaLabel = isRunning ? "Syncthing connected (click to stop)" : "Click to start Syncthing";
+				this.statusBarConnectionIconItem.addClasses(['plugin-editor-status', 'mouse-pointer']);
 			}
 
 			if (this.statusBarLastSyncTextItem) {
 				this.statusBarLastSyncTextItem.setText(`Last sync: ${this.syncthingLastSyncDate}`);
 			}
 		});
-	}
-
-	async isSyncthingRunning(): Promise<boolean> {
-		const config = {
-			headers: {
-				'X-API-Key': this.settings.syncthingApiKey,
-			}
-		};
-		
-		return axios.get(SYNCTHING_URL, config)
-			.then(response => true)
-			.catch(error => { console.log("Syncthing not running"); return false; });
 	}
 
 	getPluginAbsolutePath(): string {
@@ -273,7 +298,7 @@ export default class SyncthingLauncher extends Plugin {
 
 	async getLastSyncDate() {
 		try {
-		  const response = await axios.get(SYNCTHING_URL + `rest/db/status?folder=${this.settings.vaultFolderID}`, {
+		  const response = await axios.get(this.getSyncthingURL() + `rest/db/status?folder=${this.settings.vaultFolderID}`, {
 			headers: {
 			  'X-API-Key': this.settings.syncthingApiKey,
 			}
@@ -282,6 +307,7 @@ export default class SyncthingLauncher extends Plugin {
 		  if (response.data && response.data.stateChanged) {
 			return new Date(response.data.stateChanged);
 		  } else {
+			console.log(response);
 			console.log('No sync data found');
 			return null;
 		  }
@@ -365,8 +391,3 @@ class SettingTab extends PluginSettingTab {
 				}));
 	}
 }
-
-function execAsync(arg0: string): { stdout: any; stderr: any; } | PromiseLike<{ stdout: any; stderr: any; }> {
-	throw new Error('Function not implemented.');
-}
-

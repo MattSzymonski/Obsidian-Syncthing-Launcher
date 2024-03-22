@@ -49,7 +49,7 @@ jobs:
       - name: Zip release files
         run: |
           tag="${GITHUB_REF#refs/tags/}"
-          zip -r "obsidian-syncthing-launcher-${tag}.zip" main.js manifest.json styles.css syncthing/
+          zip -r "obsidian-syncthing-launcher-${tag}.zip" main.js manifest.json styles.css syncthing/ docker/
 
       - name: Create lowercase tag name
         id: format_tag

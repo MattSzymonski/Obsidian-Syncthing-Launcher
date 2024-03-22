@@ -7,8 +7,6 @@ services:
       dockerfile: Dockerfile
     container_name: syncthing_cors_proxy
     restart: unless-stopped
-    volumes:
-      - Z:\Obsidian\MattSzymonski\.obsidian\plugins\obsidian-syncthing-launcher-1.0.2\docker\nginx.conf:/etc/nginx/conf.d/default.conf
     ports:
       - 8380:80  
   syncthing:
